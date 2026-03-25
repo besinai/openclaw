@@ -14,7 +14,6 @@ import {
 } from "./auth-rate-limit.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
-  isLocalishHost,
   isLoopbackAddress,
   resolveRequestClientIp,
   isTrustedProxyAddress,
@@ -123,25 +122,22 @@ export function isLocalDirectRequest(
   }
 
   const hasForwarded = Boolean(
+    req.headers?.forwarded ||
     req.headers?.["x-forwarded-for"] ||
+    req.headers?.["x-forwarded-proto"] ||
     req.headers?.["x-real-ip"] ||
     req.headers?.["x-forwarded-host"],
   );
 
-  if (!hasForwarded && isLoopbackAddress(req.socket?.remoteAddress)) {
-    return isLocalishHost(req.headers?.host);
+  if (!hasForwarded) {
+    return isLoopbackAddress(req.socket?.remoteAddress);
   }
 
   // When forwarded headers are present, resolveRequestClientIp intentionally fails closed
   // if the proxy chain is missing or invalid. Do not fall back to the raw socket address here,
   // or proxied requests can be reclassified as local-direct.
   const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
-  if (!isLoopbackAddress(clientIp)) {
-    return false;
-  }
-
-  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
+  return isLoopbackAddress(clientIp);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -344,6 +340,9 @@ function authorizeTrustedProxy(params: {
   const remoteAddr = req.socket?.remoteAddress;
   if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
     return { reason: "trusted_proxy_untrusted_source" };
+  }
+  if (isLoopbackAddress(remoteAddr)) {
+    return { reason: "trusted_proxy_loopback_source" };
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];

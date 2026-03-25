@@ -692,10 +692,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("token_missing_config");
     });
 
-    it("runs full proxy auth for same-host proxy that forwards only the identity header", async () => {
-      // A same-host reverse proxy (e.g. Caddy/nginx) may not send x-forwarded-for
-      // but still forwards the configured userHeader; it must go through authorizeTrustedProxy
-      // so allowUsers and userHeader are properly evaluated.
+    it("rejects trusted-proxy identity headers from loopback sources", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
@@ -713,9 +710,8 @@ describe("trusted-proxy auth", () => {
           },
         } as never,
       });
-      expect(res.ok).toBe(true);
-      expect(res.method).toBe("trusted-proxy");
-      expect(res.user).toBe("nick@example.com");
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("fails closed when forwarded headers are present but the client chain resolves to loopback", async () => {
@@ -739,7 +735,29 @@ describe("trusted-proxy auth", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_user_missing");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
+    });
+
+    it("uses token fallback for direct loopback even when Host is not localish", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          token: "secret",
+        },
+        connectAuth: { token: "secret" },
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "evil.example",
+          },
+        } as never,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("token");
     });
 
     it("rejects same-host proxy request with missing required header", async () => {
@@ -761,7 +779,7 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_missing_header_x-forwarded-proto");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("still fails closed when trusted-proxy config is missing", async () => {
